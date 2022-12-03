@@ -6,4 +6,5 @@ pub fn main() {
         .add_plugins(DefaultPlugins)
         .add_plugin(EguiPlugin)
         .run();
+    println!("Hello, world!");
 }
