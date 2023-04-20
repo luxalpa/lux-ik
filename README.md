@@ -22,6 +22,7 @@ It is not at all optimized for performance yet, and it takes a bit to converge o
 - Docs, Examples
 - More complex joint limits (user defined functions)
 - Springy weights
+- Option to use Transforms instead of Mat4's
 
 ## Contributing
 If you want to contribute, please open an issue.

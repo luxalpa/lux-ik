@@ -354,21 +354,7 @@ pub fn solve(
 
             let end_rot = world_rot * rotation;
 
-            let final_xform = Mat4::from_rotation_translation(end_rot, translation);
-
-            let joint_cfg = affected_joints
-                .iter()
-                .find(|joint| joint.joint_id == dof.joint_id)
-                .unwrap();
-
-            if let Some(custom_axis) = joint_cfg.restrict_rotation_axis {
-                let custom_axis = final_xform.transform_vector3(custom_axis);
-                let angle = swing_twist_decompose(end_rot, custom_axis);
-                // println!("Angle: {}", angle.to_degrees());
-                // println!("{:?}", end_rot.to_axis_angle_180());
-            }
-
-            raw_joint_xforms[dof.joint_id] = final_xform;
+            raw_joint_xforms[dof.joint_id] = Mat4::from_rotation_translation(end_rot, translation);
         }
     }
 
