@@ -2,8 +2,8 @@ use glam::{vec3, EulerRot, Mat3, Mat4, Quat, Vec3};
 use nalgebra::{DMatrix, Dyn, Matrix, VecStorage, U1};
 use std::f32::consts::PI;
 
-const DAMPING: f32 = 50.0;
-const THRESHOLD: f32 = 30.5;
+const DAMPING: f32 = 10.0;
+const THRESHOLD: f32 = 10.5;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct JointLimit {
@@ -278,7 +278,6 @@ fn pseudo_inverse_damped_least_squares(
     jac_inv
 }
 
-#[allow(unused)]
 // Important: The joint chain must be in topological order
 pub fn solve(
     full_skeleton: &mut [Mat4],
@@ -485,7 +484,7 @@ mod tests {
             kind: IKGoalKind::Rotation(expected_rot_mat),
         }];
 
-        for _ in 0..4000 {
+        for _ in 0..200 {
             solve(
                 &mut skeleton,
                 &bind_pose,
