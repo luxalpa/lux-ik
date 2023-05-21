@@ -31,7 +31,7 @@ checksum = "8e4afd9ad95555081e109fe1d21f2a30c691b5f0919c67dfa690a2e1eb6bd51c"
 
 [[package]]
 name = "lux-ik"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "glam",
  "nalgebra",
