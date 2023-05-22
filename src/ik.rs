@@ -278,6 +278,18 @@ fn pseudo_inverse_damped_least_squares(
     jac_inv
 }
 
+pub enum MetaLoggable {
+    Float(f32),
+}
+
+pub trait MetaLogger {
+    fn log(&mut self, name: String, data: MetaLoggable);
+}
+
+impl MetaLogger for () {
+    fn log(&mut self, _name: String, _data: MetaLoggable) {}
+}
+
 // Important: The joint chain must be in topological order
 pub fn solve(
     full_skeleton: &mut [Mat4],
@@ -285,6 +297,7 @@ pub fn solve(
     parents: &[i32],
     affected_joints: &[IKJointControl],
     goals: &[IKGoal],
+    logger: Option<&mut impl MetaLogger>,
 ) {
     let dof_data = build_dof_data(full_skeleton, affected_joints, goals, USE_QUATERNIONS);
 
@@ -336,6 +349,11 @@ pub fn solve(
     let threshold = THRESHOLD.to_radians();
     let max_angle = theta.amax();
     let beta = threshold / f32::max(max_angle, threshold);
+
+    logger.map(|logger| {
+        // logger.log("theta".to_string(), &theta);
+        logger.log("beta".to_string(), MetaLoggable::Float(beta));
+    });
 
     // Need to remember the original joint transforms
     let previous_skeleton = full_skeleton.to_vec();
