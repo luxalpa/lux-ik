@@ -280,6 +280,7 @@ fn pseudo_inverse_damped_least_squares(
 
 pub enum MetaLoggable {
     Float(f32),
+    String(String),
 }
 
 pub trait MetaLogger {
@@ -352,7 +353,15 @@ pub fn solve(
 
     logger.map(|logger| {
         // logger.log("theta".to_string(), &theta);
+        logger.log(
+            "max_angle".to_string(),
+            MetaLoggable::Float(max_angle.to_degrees()),
+        );
         logger.log("beta".to_string(), MetaLoggable::Float(beta));
+        logger.log(
+            "jacobian".to_string(),
+            MetaLoggable::String(format!("{}", jacobian)),
+        );
     });
 
     // Need to remember the original joint transforms
