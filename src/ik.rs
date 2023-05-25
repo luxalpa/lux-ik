@@ -2,7 +2,7 @@ use glam::{vec3, EulerRot, Mat3, Mat4, Quat, Vec3};
 use nalgebra::{DMatrix, Dyn, Matrix, VecStorage, U1};
 use std::f32::consts::PI;
 
-const DAMPING: f32 = 10.0;
+const DAMPING: f32 = 3.0;
 const THRESHOLD: f32 = 10.5;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -20,7 +20,8 @@ pub struct IKJointControl {
     pub restrict_rotation_axis: Option<Vec3>,
 
     pub limits: Option<Vec<JointLimit>>,
-    // TODO: Weights
+
+    pub stiffness: f32,
 }
 
 impl IKJointControl {
@@ -29,6 +30,7 @@ impl IKJointControl {
             joint_id,
             restrict_rotation_axis: None,
             limits: None,
+            stiffness: 1.0,
         }
     }
 
@@ -44,6 +46,10 @@ impl IKJointControl {
             limits: Some(limits.to_vec()),
             ..self
         }
+    }
+
+    pub fn with_stiffness(self, stiffness: f32) -> Self {
+        IKJointControl { stiffness, ..self }
     }
 }
 
@@ -252,7 +258,10 @@ fn build_dof_data(
                 dof_data.push(DegreeOfFreedom {
                     joint_id: joint.joint_id,
                     kind: DoFKind::Quaternion { axis },
-                    influences,
+                    influences: influences
+                        .into_iter()
+                        .map(|i| i / joint.stiffness)
+                        .collect(),
                 });
             }
         }
@@ -298,7 +307,7 @@ pub fn solve(
     parents: &[i32],
     affected_joints: &[IKJointControl],
     goals: &[IKGoal],
-    logger: Option<&mut impl MetaLogger>,
+    mut logger: Option<&mut impl MetaLogger>,
 ) {
     let dof_data = build_dof_data(full_skeleton, affected_joints, goals, USE_QUATERNIONS);
 
@@ -328,6 +337,10 @@ pub fn solve(
 
                 let (axis_of_rotation, angle) = r.to_axis_angle_180();
 
+                if let Some(logger) = &mut logger {
+                    logger.log("angle".to_string(), MetaLoggable::Float(angle.to_degrees()));
+                }
+
                 let scaled_axis = axis_of_rotation * angle;
 
                 IterableVec3(scaled_axis).into_iter().collect::<Vec<_>>()
@@ -351,7 +364,7 @@ pub fn solve(
     let max_angle = theta.amax();
     let beta = threshold / f32::max(max_angle, threshold);
 
-    logger.map(|logger| {
+    if let Some(logger) = logger {
         // logger.log("theta".to_string(), &theta);
         logger.log(
             "max_angle".to_string(),
@@ -362,7 +375,11 @@ pub fn solve(
             "jacobian".to_string(),
             MetaLoggable::String(format!("{}", jacobian)),
         );
-    });
+        logger.log(
+            "effectors".to_string(),
+            MetaLoggable::String(format!("{}", effector_vec)),
+        );
+    };
 
     // Need to remember the original joint transforms
     let previous_skeleton = full_skeleton.to_vec();
@@ -504,6 +521,7 @@ mod tests {
                 &parents,
                 &affected_joints,
                 &goals,
+                None,
             );
         }
 
