@@ -1,5 +1,6 @@
 use glam::{vec3, EulerRot, Mat3, Mat4, Quat, Vec3};
 use nalgebra::{DMatrix, Dyn, Matrix, VecStorage, U1};
+use std::collections::HashMap;
 use std::f32::consts::PI;
 
 const DAMPING: f32 = 3.0;
@@ -140,130 +141,123 @@ fn ang_diff(a: f32, b: f32) -> f32 {
     (delta + PI) % (2.0 * PI) - PI
 }
 
-const USE_QUATERNIONS: bool = true;
-
-fn build_dof_data(
-    full_skeleton: &[Mat4],
+fn build_dof_data<S: Skeleton>(
+    skeleton: &S,
     affected_joints: &[IKJointControl],
     goals: &[IKGoal],
-    use_quaternions: bool,
 ) -> Vec<DegreeOfFreedom> {
     let mut dof_data: Vec<DegreeOfFreedom> = Vec::new();
 
     for joint in affected_joints {
-        // TODO: Use w_axis.truncate(); instead of transform_point3
-        let origin_of_rotation = full_skeleton[joint.joint_id].transform_point3(Vec3::ZERO);
+        let origin_of_rotation = skeleton.current_pose(joint.joint_id).translation();
 
         // Quaternion joints are a special case because they allow infinite number of rotation axes.
-        if use_quaternions {
-            for (goal_idx, goal) in goals.iter().enumerate() {
-                let mut influences: Vec<f32> = Vec::new();
+        for (goal_idx, goal) in goals.iter().enumerate() {
+            let mut influences: Vec<f32> = Vec::new();
 
-                let (temp_influences, axis) = match goal.kind {
-                    IKGoalKind::Position(goal_position) => {
-                        let end_effector_pos =
-                            full_skeleton[goal.end_effector_id].transform_point3(Vec3::ZERO);
-                        let target_direction = goal_position - end_effector_pos;
+            let (temp_influences, axis) = match goal.kind {
+                IKGoalKind::Position(goal_position) => {
+                    let end_effector_pos =
+                        skeleton.current_pose(goal.end_effector_id).translation();
+                    let target_direction = goal_position - end_effector_pos;
 
-                        let to_e = end_effector_pos - origin_of_rotation;
-                        let axis_of_rotation = if let Some(axis) = joint.restrict_rotation_axis {
-                            let joint_rot = Quat::from_mat4(&full_skeleton[joint.joint_id]);
-                            joint_rot * axis
-                        } else {
-                            get_rotation_axis(to_e, target_direction)
-                        };
-
-                        let influence = axis_of_rotation.cross(to_e);
-
-                        (
-                            vec![influence.x, influence.y, influence.z],
-                            axis_of_rotation,
-                        )
-                    }
-                    IKGoalKind::Rotation(goal_rotation) => {
-                        let end_effector_rot =
-                            Quat::from_mat4(&full_skeleton[goal.end_effector_id]);
-
-                        let rotation = Quat::from_mat3(&goal_rotation) * end_effector_rot.inverse();
-
-                        let axis_of_rotation = if let Some(axis) = joint.restrict_rotation_axis {
-                            let joint_rot = Quat::from_mat4(&full_skeleton[joint.joint_id]);
-                            joint_rot * axis
-                        } else {
-                            let (axis_of_rotation, angle) = rotation.to_axis_angle_180();
-
-                            if angle < 0.0 {
-                                -axis_of_rotation
-                            } else {
-                                axis_of_rotation
-                            }
-                        };
-
-                        let influence = axis_of_rotation;
-                        (
-                            vec![influence.x, influence.y, influence.z],
-                            axis_of_rotation,
-                        )
-                    }
-                    IKGoalKind::RotY(_) => {
-                        let axis_of_rotation = if let Some(axis) = joint.restrict_rotation_axis {
-                            let joint_rot = Quat::from_mat4(&full_skeleton[joint.joint_id]);
-                            joint_rot * axis
-                        } else {
-                            Vec3::Y
-                        };
-
-                        let influence = Quat::from_axis_angle(axis_of_rotation, 1.0)
-                            .to_euler(EulerRot::YXZ)
-                            .0;
-
-                        (vec![influence], axis_of_rotation)
-                    }
-                };
-
-                for g2_idx in 0..goals.len() {
-                    if g2_idx == goal_idx {
-                        influences.extend(&temp_influences);
+                    let to_e = end_effector_pos - origin_of_rotation;
+                    let axis_of_rotation = if let Some(axis) = joint.restrict_rotation_axis {
+                        let joint_rot = skeleton.current_pose(joint.joint_id).rotation();
+                        joint_rot * axis
                     } else {
-                        match goals[g2_idx].kind {
-                            IKGoalKind::Position(_) => {
-                                // TODO: Calculate these values in order to make the IK converge faster
-                                // let end_effector_pos = full_skeleton[goals[g2_idx].end_effector_id]
-                                //     .transform_point3(Vec3::ZERO);
-                                // let to_e = end_effector_pos - origin_of_rotation;
-                                // let influence = axis.cross(to_e);
-                                // influences.push(influence.x);
-                                // influences.push(influence.y);
-                                // influences.push(influence.z);
-                                influences.push(0.0);
-                                influences.push(0.0);
-                                influences.push(0.0);
-                            }
-                            IKGoalKind::Rotation(_) => {
-                                // influences.push(axis.x);
-                                // influences.push(axis.y);
-                                // influences.push(axis.z);
-                                influences.push(0.0);
-                                influences.push(0.0);
-                                influences.push(0.0);
-                            }
-                            IKGoalKind::RotY(_) => {
-                                influences.push(0.0); // TODO
-                            }
+                        get_rotation_axis(to_e, target_direction)
+                    };
+
+                    let influence = axis_of_rotation.cross(to_e);
+
+                    (
+                        vec![influence.x, influence.y, influence.z],
+                        axis_of_rotation,
+                    )
+                }
+                IKGoalKind::Rotation(goal_rotation) => {
+                    let end_effector_rot = skeleton.current_pose(goal.end_effector_id).rotation();
+
+                    let rotation = Quat::from_mat3(&goal_rotation) * end_effector_rot.inverse();
+
+                    let axis_of_rotation = if let Some(axis) = joint.restrict_rotation_axis {
+                        let joint_rot = skeleton.current_pose(joint.joint_id).rotation();
+                        joint_rot * axis
+                    } else {
+                        let (axis_of_rotation, angle) = rotation.to_axis_angle_180();
+
+                        if angle < 0.0 {
+                            -axis_of_rotation
+                        } else {
+                            axis_of_rotation
+                        }
+                    };
+
+                    let influence = axis_of_rotation;
+                    (
+                        vec![influence.x, influence.y, influence.z],
+                        axis_of_rotation,
+                    )
+                }
+                IKGoalKind::RotY(_) => {
+                    let axis_of_rotation = if let Some(axis) = joint.restrict_rotation_axis {
+                        let joint_rot = skeleton.current_pose(joint.joint_id).rotation();
+                        joint_rot * axis
+                    } else {
+                        Vec3::Y
+                    };
+
+                    let influence = Quat::from_axis_angle(axis_of_rotation, 1.0)
+                        .to_euler(EulerRot::YXZ)
+                        .0;
+
+                    (vec![influence], axis_of_rotation)
+                }
+            };
+
+            for g2_idx in 0..goals.len() {
+                if g2_idx == goal_idx {
+                    influences.extend(&temp_influences);
+                } else {
+                    match goals[g2_idx].kind {
+                        IKGoalKind::Position(_) => {
+                            // TODO: Calculate these values in order to make the IK converge faster
+                            // let end_effector_pos = full_skeleton[goals[g2_idx].end_effector_id]
+                            //     .transform_point3(Vec3::ZERO);
+                            // let to_e = end_effector_pos - origin_of_rotation;
+                            // let influence = axis.cross(to_e);
+                            // influences.push(influence.x);
+                            // influences.push(influence.y);
+                            // influences.push(influence.z);
+                            influences.push(0.0);
+                            influences.push(0.0);
+                            influences.push(0.0);
+                        }
+                        IKGoalKind::Rotation(_) => {
+                            // influences.push(axis.x);
+                            // influences.push(axis.y);
+                            // influences.push(axis.z);
+                            influences.push(0.0);
+                            influences.push(0.0);
+                            influences.push(0.0);
+                        }
+                        IKGoalKind::RotY(_) => {
+                            influences.push(0.0); // TODO
                         }
                     }
                 }
-
-                // Quaternion joints require us to create new DegreesOfFreedom on demand for each new rotation axis.
-                dof_data.push(DegreeOfFreedom {
-                    joint_id: joint.joint_id,
-                    kind: DoFKind::Quaternion { axis },
-                    influences: influences
-                        .into_iter()
-                        .map(|i| i / joint.stiffness)
-                        .collect(),
-                });
             }
+
+            // Quaternion joints require us to create new DegreesOfFreedom on demand for each new rotation axis.
+            dof_data.push(DegreeOfFreedom {
+                joint_id: joint.joint_id,
+                kind: DoFKind::Quaternion { axis },
+                influences: influences
+                    .into_iter()
+                    .map(|i| i / joint.stiffness)
+                    .collect(),
+            });
         }
     }
 
@@ -287,29 +281,16 @@ fn pseudo_inverse_damped_least_squares(
     jac_inv
 }
 
-pub enum MetaLoggable {
-    Float(f32),
-    String(String),
-}
-
-pub trait MetaLogger {
-    fn log(&mut self, name: String, data: MetaLoggable);
-}
-
-impl MetaLogger for () {
-    fn log(&mut self, _name: String, _data: MetaLoggable) {}
+pub trait Skeleton {
+    fn current_pose(&self, id: usize) -> Mat4;
+    fn local_bind_pose(&self, id: usize) -> Mat4;
+    fn parent(&self, id: usize) -> Option<usize>;
+    fn update_pose(&mut self, id: usize, pose: Mat4);
 }
 
 // Important: The joint chain must be in topological order
-pub fn solve(
-    full_skeleton: &mut [Mat4],
-    local_bind_pose: &[Mat4],
-    parents: &[i32],
-    affected_joints: &[IKJointControl],
-    goals: &[IKGoal],
-    mut logger: Option<&mut impl MetaLogger>,
-) {
-    let dof_data = build_dof_data(full_skeleton, affected_joints, goals, USE_QUATERNIONS);
+pub fn solve<S: Skeleton>(skeleton: &mut S, affected_joints: &[IKJointControl], goals: &[IKGoal]) {
+    let dof_data = build_dof_data(skeleton, affected_joints, goals);
 
     let num_goal_components = get_num_effector_components(goals);
     let num_dof_components = dof_data.len();
@@ -324,29 +305,26 @@ pub fn solve(
         .iter()
         .map(|goal| match goal.kind {
             IKGoalKind::Position(goal_position) => {
-                let end_effector_pos =
-                    full_skeleton[goal.end_effector_id].transform_point3(Vec3::ZERO);
+                let end_effector_pos = skeleton.current_pose(goal.end_effector_id).translation();
                 IterableVec3(goal_position - end_effector_pos)
                     .into_iter()
                     .collect::<Vec<_>>()
             }
             IKGoalKind::Rotation(goal_rotation) => {
-                let end_effector_rot = Quat::from_mat4(&full_skeleton[goal.end_effector_id]);
+                let end_effector_rot = skeleton.current_pose(goal.end_effector_id).rotation();
 
                 let r = Quat::from_mat3(&goal_rotation) * end_effector_rot.inverse();
 
                 let (axis_of_rotation, angle) = r.to_axis_angle_180();
-
-                if let Some(logger) = &mut logger {
-                    logger.log("angle".to_string(), MetaLoggable::Float(angle.to_degrees()));
-                }
 
                 let scaled_axis = axis_of_rotation * angle;
 
                 IterableVec3(scaled_axis).into_iter().collect::<Vec<_>>()
             }
             IKGoalKind::RotY(goal_rot_y) => {
-                let end_effector_rot = Quat::from_mat4(&full_skeleton[goal.end_effector_id])
+                let end_effector_rot = skeleton
+                    .current_pose(goal.end_effector_id)
+                    .rotation()
                     .to_euler(EulerRot::YXZ)
                     .0;
                 let delta = ang_diff(end_effector_rot, goal_rot_y);
@@ -364,33 +342,17 @@ pub fn solve(
     let max_angle = theta.amax();
     let beta = threshold / f32::max(max_angle, threshold);
 
-    if let Some(logger) = logger {
-        // logger.log("theta".to_string(), &theta);
-        logger.log(
-            "max_angle".to_string(),
-            MetaLoggable::Float(max_angle.to_degrees()),
-        );
-        logger.log("beta".to_string(), MetaLoggable::Float(beta));
-        logger.log(
-            "jacobian".to_string(),
-            MetaLoggable::String(format!("{}", jacobian)),
-        );
-        logger.log(
-            "effectors".to_string(),
-            MetaLoggable::String(format!("{}", effector_vec)),
-        );
-    };
+    let affected_joint_ids: Box<[usize]> = affected_joints.iter().map(|j| j.joint_id).collect();
 
     // Need to remember the original joint transforms
-    let previous_skeleton = full_skeleton.to_vec();
+    let previous_skeleton = cache_joint_xforms(skeleton, &affected_joint_ids);
 
     // Our rotation axis is in world space, but during the rotation our position needs to stay fixed.
-    let mut raw_joint_xforms = full_skeleton.to_vec();
+    let mut raw_joint_xforms = previous_skeleton.clone();
 
     for (theta_idx, dof) in dof_data.iter().enumerate() {
-        let joint_xform = raw_joint_xforms[dof.joint_id];
-        let translation = joint_xform.transform_point3(Vec3::ZERO);
-        let rotation = Quat::from_mat4(&joint_xform);
+        let joint_xform = raw_joint_xforms.get(&dof.joint_id).unwrap();
+        let (_, rotation, translation) = joint_xform.to_scale_rotation_translation();
 
         #[allow(irrefutable_let_patterns)]
         if let DoFKind::Quaternion { axis } = dof.kind {
@@ -398,25 +360,33 @@ pub fn solve(
 
             let end_rot = world_rot * rotation;
 
-            raw_joint_xforms[dof.joint_id] = Mat4::from_rotation_translation(end_rot, translation);
+            raw_joint_xforms.insert(
+                dof.joint_id,
+                Mat4::from_rotation_translation(end_rot, translation),
+            );
         }
     }
 
     // Correct the rotation of the other joints
     for dof in &dof_data {
-        let parent_id = parents[dof.joint_id];
-        let parent_xform = *full_skeleton
-            .get(parent_id as usize)
-            .unwrap_or(&Mat4::IDENTITY);
-        let parent_xform_old = *previous_skeleton
-            .get(parent_id as usize)
-            .unwrap_or(&Mat4::IDENTITY);
+        let parent_id = skeleton.parent(dof.joint_id);
+        let (parent_xform, parent_xform_old) = match parent_id {
+            Some(parent_id) => (skeleton.current_pose(parent_id), {
+                if previous_skeleton.contains_key(&parent_id) {
+                    *previous_skeleton.get(&parent_id).unwrap()
+                } else {
+                    skeleton.current_pose(parent_id)
+                }
+            }),
+            None => (Mat4::IDENTITY, Mat4::IDENTITY),
+        };
 
-        let local_rot =
-            Quat::from_mat4(&(parent_xform_old.inverse() * raw_joint_xforms[dof.joint_id]))
-                .normalize();
+        let local_rot = (parent_xform_old.inverse()
+            * *raw_joint_xforms.get(&dof.joint_id).unwrap())
+        .rotation()
+        .normalize();
 
-        let local_translation = local_bind_pose[dof.joint_id].transform_point3(Vec3::ZERO);
+        let local_translation = skeleton.local_bind_pose(dof.joint_id).translation();
         let mut world_xform =
             parent_xform * Mat4::from_rotation_translation(local_rot, local_translation);
 
@@ -426,8 +396,8 @@ pub fn solve(
             .unwrap();
 
         if let Some(limits) = &joint_cfg.limits {
-            let local_xform = Quat::from_mat4(&(parent_xform.inverse() * world_xform));
-            let local_bind_xform = Quat::from_mat4(&(local_bind_pose[dof.joint_id]));
+            let local_xform = (parent_xform.inverse() * world_xform).rotation();
+            let local_bind_xform = skeleton.local_bind_pose(dof.joint_id).rotation();
 
             // limits are relative to the local bind pose of the joints
             let local_change = local_bind_xform.inverse() * local_xform;
@@ -445,12 +415,23 @@ pub fn solve(
             }
         }
 
-        full_skeleton[dof.joint_id] = world_xform;
+        skeleton.update_pose(dof.joint_id, world_xform);
     }
+}
+
+// TODO: Directly pass iterator
+fn cache_joint_xforms<S: Skeleton>(skeleton: &S, joint_ids: &[usize]) -> HashMap<usize, Mat4> {
+    HashMap::from_iter(
+        joint_ids
+            .iter()
+            .copied()
+            .map(|joint_id| (joint_id, skeleton.current_pose(joint_id))),
+    )
 }
 
 // Retrieve the angle of rotation around the given axis
 // https://stackoverflow.com/questions/3684269/component-of-a-quaternion-rotation-around-an-axis
+// TODO: Check if this is really what we want!
 fn swing_twist_decompose(q: Quat, dir: Vec3) -> f32 {
     let rotation_axis = vec3(q.x, q.y, q.z);
     let dot_prod = dir.dot(rotation_axis);
@@ -486,6 +467,21 @@ fn fuzzy_compare_vec3(a: Vec3, b: Vec3) -> bool {
 fn fuzzy_compare_f32(a: f32, b: f32) -> bool {
     let epsilon = 0.0001;
     (a - b).abs() < epsilon
+}
+
+trait Mat4Helpers {
+    fn translation(self) -> Vec3;
+    fn rotation(self) -> Quat;
+}
+
+impl Mat4Helpers for Mat4 {
+    fn translation(self) -> Vec3 {
+        self.w_axis.truncate()
+    }
+
+    fn rotation(self) -> Quat {
+        Quat::from_mat4(&self)
+    }
 }
 
 #[cfg(test)]
