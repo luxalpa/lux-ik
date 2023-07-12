@@ -1,8 +1,8 @@
 use glam::{vec3, EulerRot, Mat3, Mat4, Quat, Vec3};
 use nalgebra::{DMatrix, MatrixXx1};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::f32::consts::PI;
+use std::rc::Rc;
 
 const DAMPING: f32 = 3.0;
 const THRESHOLD: f32 = 10.5;
@@ -161,9 +161,7 @@ fn build_dof_data<S: Skeleton>(
         for (goal_idx, goal) in goals.iter().enumerate() {
             let dof = &mut itd.dof_data[dof_idx];
             dof_idx += 1;
-            let influences = &mut dof.influences;
-
-            let mut inf_idx = 0;
+            let mut influence_pusher = SlicePusher::new(&mut dof.influences);
 
             for g2_idx in 0..goals.len() {
                 if g2_idx == goal_idx {
@@ -183,12 +181,7 @@ fn build_dof_data<S: Skeleton>(
                             };
 
                             let influence = axis_of_rotation.cross(to_e);
-
-                            influences[inf_idx] = influence.x;
-                            influences[inf_idx + 1] = influence.y;
-                            influences[inf_idx + 2] = influence.z;
-                            inf_idx += 3;
-
+                            influence_pusher.push(influence);
                             axis_of_rotation
                         }
                         IKGoalKind::Rotation(goal_rotation) => {
@@ -213,10 +206,7 @@ fn build_dof_data<S: Skeleton>(
                             };
 
                             let influence = axis_of_rotation;
-                            influences[inf_idx] = influence.x;
-                            influences[inf_idx + 1] = influence.y;
-                            influences[inf_idx + 2] = influence.z;
-                            inf_idx += 3;
+                            influence_pusher.push(influence);
 
                             axis_of_rotation
                         }
@@ -233,8 +223,7 @@ fn build_dof_data<S: Skeleton>(
                                 .to_euler(EulerRot::YXZ)
                                 .0;
 
-                            influences[inf_idx] = influence;
-                            inf_idx += 1;
+                            influence_pusher.push(influence);
                             axis_of_rotation
                         }
                     };
@@ -251,28 +240,30 @@ fn build_dof_data<S: Skeleton>(
                             // influences.push(influence.x);
                             // influences.push(influence.y);
                             // influences.push(influence.z);
-                            influences[inf_idx] = 0.0;
-                            influences[inf_idx + 1] = 0.0;
-                            influences[inf_idx + 2] = 0.0;
-                            inf_idx += 3;
+                            // influences[inf_idx] = 0.0;
+                            // influences[inf_idx + 1] = 0.0;
+                            // influences[inf_idx + 2] = 0.0;
+                            influence_pusher.skip::<Vec3>();
                         }
                         IKGoalKind::Rotation(_) => {
                             // influences.push(axis.x);
                             // influences.push(axis.y);
                             // influences.push(axis.z);
-                            influences[inf_idx] = 0.0;
-                            influences[inf_idx + 1] = 0.0;
-                            influences[inf_idx + 2] = 0.0;
-                            inf_idx += 3;
+                            // influences[inf_idx] = 0.0;
+                            // influences[inf_idx + 1] = 0.0;
+                            // influences[inf_idx + 2] = 0.0;
+                            influence_pusher.skip::<Vec3>();
                         }
                         IKGoalKind::RotY(_) => {
-                            influences[inf_idx] = 0.0;
-                            inf_idx += 1;
+                            // influences[inf_idx] = 0.0;
+                            influence_pusher.skip::<f32>();
                         }
                     }
                 }
             }
-            influences.iter_mut().for_each(|i| *i /= joint.stiffness);
+            dof.influences
+                .iter_mut()
+                .for_each(|i| *i /= joint.stiffness);
         }
     }
 }
@@ -318,15 +309,15 @@ pub trait Skeleton {
     fn current_pose(&self, id: usize) -> Mat4;
     fn local_bind_pose(&self, id: usize) -> Mat4;
     fn parent(&self, id: usize) -> Option<usize>;
-    fn update_poses(&mut self, poses: &HashMap<usize, Mat4>);
+    fn update_poses(&mut self, poses: &JointMap);
 }
 
 // TODO: Use just Quat instead of Mat4 (?) and use local space as much as possible
 
 struct IterationData {
-    previous_poses: HashMap<usize, Mat4>,
-    final_poses: HashMap<usize, Mat4>,
-    raw_joint_xforms: HashMap<usize, Mat4>,
+    previous_poses: JointMap,
+    final_poses: JointMap,
+    raw_joint_xforms: JointMap,
     jacobian: DMatrix<f32>,
     effector_vec: MatrixXx1<f32>,
     dof_data: Box<[DegreeOfFreedom]>,
@@ -348,8 +339,12 @@ pub struct IKSolver {
 impl IKSolver {
     pub fn new(affected_joints: Box<[IKJointControl]>, goals: Box<[IKGoal]>) -> Self {
         let affected_joint_ids = affected_joints.iter().map(|j| j.joint_id).collect();
-        let previous_poses =
-            HashMap::from_iter(affected_joints.iter().map(|j| (j.joint_id, Mat4::IDENTITY)));
+        let previous_poses = JointMap::new(
+            affected_joints.iter().map(|j| j.joint_id).collect(),
+            [Mat4::IDENTITY]
+                .repeat(affected_joints.len())
+                .into_boxed_slice(),
+        );
         let final_poses = previous_poses.clone();
         let raw_joint_xforms = previous_poses.clone();
         let num_goal_components = get_num_effector_components(&goals);
@@ -389,17 +384,14 @@ impl IKSolver {
 
         let jac_inv = pseudo_inverse_damped_least_squares(&itd.jacobian, self.num_goal_components);
 
-        let mut p = 0;
+        let mut effector_vec_pusher = SlicePusher::new(itd.effector_vec.as_mut_slice());
         for goal in self.goals.iter() {
             match goal.kind {
                 IKGoalKind::Position(goal_position) => {
                     let end_effector_pos =
                         skeleton.current_pose(goal.end_effector_id).translation();
                     let delta = goal_position - end_effector_pos;
-                    itd.effector_vec[(p, 0)] = delta.x;
-                    itd.effector_vec[(p + 1, 0)] = delta.y;
-                    itd.effector_vec[(p + 2, 0)] = delta.z;
-                    p += 3;
+                    effector_vec_pusher.push(delta);
                 }
                 IKGoalKind::Rotation(goal_rotation) => {
                     let end_effector_rot = skeleton.current_pose(goal.end_effector_id).rotation();
@@ -410,10 +402,7 @@ impl IKSolver {
 
                     let scaled_axis = axis_of_rotation * angle;
 
-                    itd.effector_vec[p] = scaled_axis.x;
-                    itd.effector_vec[p + 1] = scaled_axis.y;
-                    itd.effector_vec[p + 2] = scaled_axis.z;
-                    p += 3;
+                    effector_vec_pusher.push(scaled_axis);
                 }
                 IKGoalKind::RotY(goal_rot_y) => {
                     let end_effector_rot = skeleton
@@ -422,8 +411,7 @@ impl IKSolver {
                         .to_euler(EulerRot::YXZ)
                         .0;
                     let delta = ang_diff(end_effector_rot, goal_rot_y);
-                    itd.effector_vec[(p, 0)] = delta;
-                    p += 1;
+                    effector_vec_pusher.push(delta);
                 }
             }
         }
@@ -436,11 +424,11 @@ impl IKSolver {
 
         // Need to remember the original joint transforms
         self.save_previous_poses(itd, skeleton);
-        itd.raw_joint_xforms.clone_from(&itd.previous_poses);
+        itd.raw_joint_xforms.set_data_from(&itd.previous_poses);
 
         // Our rotation axis is in world space, but during the rotation our position needs to stay fixed.
         for (theta_idx, dof) in itd.dof_data.iter().enumerate() {
-            let joint_xform = itd.raw_joint_xforms.get(&dof.joint_id).unwrap();
+            let joint_xform = itd.raw_joint_xforms.get(dof.joint_id).unwrap();
             let (_, rotation, translation) = joint_xform.to_scale_rotation_translation();
 
             #[allow(irrefutable_let_patterns)]
@@ -449,7 +437,7 @@ impl IKSolver {
 
                 let end_rot = world_rot * rotation;
 
-                itd.raw_joint_xforms.insert(
+                itd.raw_joint_xforms.set(
                     dof.joint_id,
                     Mat4::from_rotation_translation(end_rot, translation),
                 );
@@ -463,20 +451,18 @@ impl IKSolver {
             let (parent_xform, parent_xform_old) = match parent_id {
                 Some(parent_id) => (
                     itd.final_poses
-                        .get(&parent_id)
-                        .copied()
+                        .get(parent_id)
                         .unwrap_or_else(|| skeleton.current_pose(parent_id)),
                     itd.previous_poses
-                        .get(&parent_id)
-                        .copied()
-                        .or_else(|| itd.final_poses.get(&parent_id).copied())
+                        .get(parent_id)
+                        .or_else(|| itd.final_poses.get(parent_id))
                         .unwrap_or_else(|| skeleton.current_pose(parent_id)),
                 ),
                 None => (Mat4::IDENTITY, Mat4::IDENTITY),
             };
 
             let local_rot = (parent_xform_old.inverse()
-                * *itd.raw_joint_xforms.get(&dof.joint_id).unwrap())
+                * itd.raw_joint_xforms.get(dof.joint_id).unwrap())
             .rotation()
             .normalize();
 
@@ -518,16 +504,105 @@ impl IKSolver {
                 }
             }
 
-            itd.final_poses.insert(dof.joint_id, world_xform);
+            itd.final_poses.set(dof.joint_id, world_xform);
         }
         skeleton.update_poses(&itd.final_poses);
     }
 
     fn save_previous_poses<S: Skeleton>(&self, itd: &mut IterationData, skeleton: &S) {
-        for &joint_id in self.affected_joint_ids.iter() {
-            itd.previous_poses
-                .insert(joint_id, skeleton.current_pose(joint_id));
+        itd.previous_poses.set_all(
+            self.affected_joint_ids
+                .iter()
+                .map(|&joint_id| skeleton.current_pose(joint_id)),
+        );
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JointMap {
+    joint_ids: Rc<[usize]>,
+    data: Box<[Mat4]>,
+}
+
+impl JointMap {
+    pub fn new(joint_ids: Rc<[usize]>, data: Box<[Mat4]>) -> Self {
+        Self { joint_ids, data }
+    }
+
+    pub fn get(&self, joint_id: usize) -> Option<Mat4> {
+        self.joint_ids
+            .iter()
+            .position(|&id| id == joint_id)
+            .map(|idx| self.data[idx])
+    }
+
+    pub fn set(&mut self, joint_id: usize, xform: Mat4) {
+        let idx = self
+            .joint_ids
+            .iter()
+            .position(|&id| id == joint_id)
+            .unwrap();
+        self.data[idx] = xform;
+    }
+
+    pub fn set_all<I>(&mut self, xforms: I)
+    where
+        I: Iterator<Item = Mat4>,
+    {
+        for (i, xform) in xforms.enumerate() {
+            self.data[i] = xform;
         }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (usize, &Mat4)> {
+        self.joint_ids.iter().copied().zip(self.data.iter())
+    }
+
+    pub fn set_data_from(&mut self, other: &Self) {
+        self.data.copy_from_slice(&other.data);
+    }
+}
+
+trait SlicePushable<T> {
+    const NUM_ELEMENTS: usize;
+    fn push_to_slice(self, slice: &mut [T], idx: usize);
+}
+
+struct SlicePusher<'a, T> {
+    index: usize,
+    slice: &'a mut [T],
+}
+
+impl<T> SlicePusher<'_, T> {
+    fn new<'a>(slice: &'a mut [T]) -> SlicePusher<'a, T> {
+        SlicePusher { index: 0, slice }
+    }
+
+    fn push<U: SlicePushable<T>>(&mut self, value: U) {
+        value.push_to_slice(self.slice, self.index);
+        self.index += U::NUM_ELEMENTS;
+    }
+
+    fn skip<U: SlicePushable<T>>(&mut self) {
+        self.index += U::NUM_ELEMENTS;
+    }
+}
+
+impl SlicePushable<f32> for f32 {
+    const NUM_ELEMENTS: usize = 1;
+
+    fn push_to_slice(self, slice: &mut [f32], idx: usize) {
+        slice[idx] = self;
+    }
+}
+
+impl SlicePushable<f32> for Vec3 {
+    const NUM_ELEMENTS: usize = 3;
+
+    fn push_to_slice(self, slice: &mut [f32], idx: usize) {
+        slice[idx] = self.x;
+        slice[idx + 1] = self.y;
+        slice[idx + 2] = self.z;
     }
 }
 
