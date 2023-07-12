@@ -73,25 +73,27 @@ pub struct IKGoal {
     pub kind: IKGoalKind,
 }
 
-fn is_parallel(a: Vec3, b: Vec3) -> bool {
-    fuzzy_compare_f32(a.normalize().dot(b.normalize()).abs(), 1.0)
-}
+const ROTATION_AXIS_EPSILON: f32 = 0.0001;
 
 fn get_rotation_axis(to_e: Vec3, target_direction: Vec3) -> Vec3 {
-    let raw_axis = if !is_parallel(to_e, target_direction) {
-        target_direction.cross(to_e)
-    } else if !is_parallel(Vec3::Y, target_direction) {
-        target_direction.cross(Vec3::Y)
-    } else {
-        target_direction.cross(Vec3::Z)
-    };
+    let raw_axis = target_direction.cross(to_e);
+    if raw_axis.length_squared() > ROTATION_AXIS_EPSILON {
+        return raw_axis.normalize();
+    }
 
-    // if we are very close to the end effector, then there's no more useful rotation axis.
-    // Returning ZERO will cause the influence to be 0. This also prevents normalize from being NaN.
-    if raw_axis == Vec3::ZERO {
-        Vec3::ZERO
+    // TODO: Use orthonormal vector?
+    let raw_axis = target_direction.cross(Vec3::Y);
+    if raw_axis.length_squared() > ROTATION_AXIS_EPSILON {
+        return raw_axis.normalize();
+    }
+
+    let raw_axis = target_direction.cross(Vec3::Z);
+    if raw_axis.length_squared() > ROTATION_AXIS_EPSILON {
+        return raw_axis.normalize();
     } else {
-        raw_axis.normalize()
+        // if we are very close to the end effector, then there's no more useful rotation axis.
+        // Returning ZERO will cause the influence to be 0. This also prevents normalize from being NaN.
+        return Vec3::ZERO;
     }
 }
 
@@ -296,6 +298,7 @@ fn pseudo_inverse_damped_least_squares(
 
     let damping_ident_matrix = nalgebra::DMatrix::<f32>::identity(num_effectors, num_effectors);
 
+    // TODO: Avoid reallocation
     let jacobian_square = jacobian * &jac_transp;
 
     let jacobian_square = jacobian_square + DAMPING * DAMPING * damping_ident_matrix;
@@ -326,6 +329,7 @@ struct IterationData {
 pub struct IKSolver {
     affected_joints: Box<[IKJointControl]>,
     goals: Box<[IKGoal]>,
+    num_iterations: usize,
 
     // cached immutable data:
     affected_joint_ids: Box<[usize]>,
@@ -337,7 +341,11 @@ pub struct IKSolver {
 }
 
 impl IKSolver {
-    pub fn new(affected_joints: Box<[IKJointControl]>, goals: Box<[IKGoal]>) -> Self {
+    pub fn new(
+        affected_joints: Box<[IKJointControl]>,
+        goals: Box<[IKGoal]>,
+        num_iterations: usize,
+    ) -> Self {
         let affected_joint_ids = affected_joints.iter().map(|j| j.joint_id).collect();
         let previous_poses = JointMap::new(
             affected_joints.iter().map(|j| j.joint_id).collect(),
@@ -356,6 +364,7 @@ impl IKSolver {
         Self {
             affected_joints,
             goals,
+            num_iterations,
             affected_joint_ids,
             num_goal_components,
             num_dof_components,
@@ -374,139 +383,143 @@ impl IKSolver {
     pub fn solve<S: Skeleton>(&self, skeleton: &mut S) {
         let itd: &mut IterationData = &mut *self.cache.borrow_mut();
 
-        build_dof_data(itd, skeleton, &self.affected_joints, &self.goals);
+        for _ in 0..self.num_iterations {
+            build_dof_data(itd, skeleton, &self.affected_joints, &self.goals);
 
-        for j in 0..self.num_dof_components {
-            for i in 0..self.num_goal_components {
-                itd.jacobian[(i, j)] = itd.dof_data[j].influences[i];
-            }
-        }
-
-        let jac_inv = pseudo_inverse_damped_least_squares(&itd.jacobian, self.num_goal_components);
-
-        let mut effector_vec_pusher = SlicePusher::new(itd.effector_vec.as_mut_slice());
-        for goal in self.goals.iter() {
-            match goal.kind {
-                IKGoalKind::Position(goal_position) => {
-                    let end_effector_pos =
-                        skeleton.current_pose(goal.end_effector_id).translation();
-                    let delta = goal_position - end_effector_pos;
-                    effector_vec_pusher.push(delta);
-                }
-                IKGoalKind::Rotation(goal_rotation) => {
-                    let end_effector_rot = skeleton.current_pose(goal.end_effector_id).rotation();
-
-                    let r = Quat::from_mat3(&goal_rotation) * end_effector_rot.inverse();
-
-                    let (axis_of_rotation, angle) = r.to_axis_angle_180();
-
-                    let scaled_axis = axis_of_rotation * angle;
-
-                    effector_vec_pusher.push(scaled_axis);
-                }
-                IKGoalKind::RotY(goal_rot_y) => {
-                    let end_effector_rot = skeleton
-                        .current_pose(goal.end_effector_id)
-                        .rotation()
-                        .to_euler(EulerRot::YXZ)
-                        .0;
-                    let delta = ang_diff(end_effector_rot, goal_rot_y);
-                    effector_vec_pusher.push(delta);
+            for j in 0..self.num_dof_components {
+                for i in 0..self.num_goal_components {
+                    itd.jacobian[(i, j)] = itd.dof_data[j].influences[i];
                 }
             }
-        }
 
-        // Theta is the resulting angles that we want to rotate by
-        let theta = &jac_inv * &itd.effector_vec;
-        let threshold = THRESHOLD.to_radians();
-        let max_angle = theta.amax();
-        let beta = threshold / f32::max(max_angle, threshold);
+            let jac_inv =
+                pseudo_inverse_damped_least_squares(&itd.jacobian, self.num_goal_components);
 
-        // Need to remember the original joint transforms
-        self.save_previous_poses(itd, skeleton);
-        itd.raw_joint_xforms.set_data_from(&itd.previous_poses);
+            let mut effector_vec_pusher = SlicePusher::new(itd.effector_vec.as_mut_slice());
+            for goal in self.goals.iter() {
+                match goal.kind {
+                    IKGoalKind::Position(goal_position) => {
+                        let end_effector_pos =
+                            skeleton.current_pose(goal.end_effector_id).translation();
+                        let delta = goal_position - end_effector_pos;
+                        effector_vec_pusher.push(delta);
+                    }
+                    IKGoalKind::Rotation(goal_rotation) => {
+                        let end_effector_rot =
+                            skeleton.current_pose(goal.end_effector_id).rotation();
 
-        // Our rotation axis is in world space, but during the rotation our position needs to stay fixed.
-        for (theta_idx, dof) in itd.dof_data.iter().enumerate() {
-            let joint_xform = itd.raw_joint_xforms.get(dof.joint_id).unwrap();
-            let (_, rotation, translation) = joint_xform.to_scale_rotation_translation();
+                        let r = Quat::from_mat3(&goal_rotation) * end_effector_rot.inverse();
 
-            #[allow(irrefutable_let_patterns)]
-            if let DoFKind::Quaternion { axis } = dof.kind {
-                let world_rot = Quat::from_axis_angle(axis, beta * theta[theta_idx]);
+                        let (axis_of_rotation, angle) = r.to_axis_angle_180();
 
-                let end_rot = world_rot * rotation;
+                        let scaled_axis = axis_of_rotation * angle;
 
-                itd.raw_joint_xforms.set(
-                    dof.joint_id,
-                    Mat4::from_rotation_translation(end_rot, translation),
-                );
-            }
-        }
-
-        // Correct the rotation of the other joints
-        // TODO: This should probably only iterate over each joint once, but DofData has multiple entries per joint!
-        for dof in itd.dof_data.iter() {
-            let parent_id = skeleton.parent(dof.joint_id);
-            let (parent_xform, parent_xform_old) = match parent_id {
-                Some(parent_id) => (
-                    itd.final_poses
-                        .get(parent_id)
-                        .unwrap_or_else(|| skeleton.current_pose(parent_id)),
-                    itd.previous_poses
-                        .get(parent_id)
-                        .or_else(|| itd.final_poses.get(parent_id))
-                        .unwrap_or_else(|| skeleton.current_pose(parent_id)),
-                ),
-                None => (Mat4::IDENTITY, Mat4::IDENTITY),
-            };
-
-            let local_rot = (parent_xform_old.inverse()
-                * itd.raw_joint_xforms.get(dof.joint_id).unwrap())
-            .rotation()
-            .normalize();
-
-            let local_translation = skeleton.local_bind_pose(dof.joint_id).translation();
-
-            // TODO: Use local transforms in this loop
-            let mut world_xform =
-                parent_xform * Mat4::from_rotation_translation(local_rot, local_translation);
-
-            let joint_cfg = self
-                .affected_joints
-                .iter()
-                .find(|joint| joint.joint_id == dof.joint_id)
-                .unwrap();
-
-            if let Some(limits) = &joint_cfg.limits {
-                let local_xform = (parent_xform.inverse() * world_xform).rotation();
-                let local_bind_xform = skeleton.local_bind_pose(dof.joint_id).rotation();
-
-                // limits are relative to the local bind pose of the joints
-                let local_change = local_bind_xform.inverse() * local_xform;
-                for limit in limits.iter() {
-                    let custom_axis = local_change * limit.axis;
-                    let angle = swing_twist_decompose(local_change, custom_axis);
-
-                    if angle < limit.min {
-                        world_xform = world_xform
-                            * Mat4::from_quat(Quat::from_axis_angle(
-                                custom_axis,
-                                limit.min - angle,
-                            ));
-                    } else if angle > limit.max {
-                        world_xform = world_xform
-                            * Mat4::from_quat(Quat::from_axis_angle(
-                                custom_axis,
-                                limit.max - angle,
-                            ));
+                        effector_vec_pusher.push(scaled_axis);
+                    }
+                    IKGoalKind::RotY(goal_rot_y) => {
+                        let end_effector_rot = skeleton
+                            .current_pose(goal.end_effector_id)
+                            .rotation()
+                            .to_euler(EulerRot::YXZ)
+                            .0;
+                        let delta = ang_diff(end_effector_rot, goal_rot_y);
+                        effector_vec_pusher.push(delta);
                     }
                 }
             }
 
-            itd.final_poses.set(dof.joint_id, world_xform);
+            // Theta is the resulting angles that we want to rotate by
+            let theta = &jac_inv * &itd.effector_vec;
+            let threshold = THRESHOLD.to_radians();
+            let max_angle = theta.amax();
+            let beta = threshold / f32::max(max_angle, threshold);
+
+            // Need to remember the original joint transforms
+            self.save_previous_poses(itd, skeleton);
+            itd.raw_joint_xforms.set_data_from(&itd.previous_poses);
+
+            // Our rotation axis is in world space, but during the rotation our position needs to stay fixed.
+            for (theta_idx, dof) in itd.dof_data.iter().enumerate() {
+                let joint_xform = itd.raw_joint_xforms.get(dof.joint_id).unwrap();
+                let (_, rotation, translation) = joint_xform.to_scale_rotation_translation();
+
+                #[allow(irrefutable_let_patterns)]
+                if let DoFKind::Quaternion { axis } = dof.kind {
+                    let world_rot = Quat::from_axis_angle(axis, beta * theta[theta_idx]);
+
+                    let end_rot = world_rot * rotation;
+
+                    itd.raw_joint_xforms.set(
+                        dof.joint_id,
+                        Mat4::from_rotation_translation(end_rot, translation),
+                    );
+                }
+            }
+
+            // Correct the rotation of the other joints
+            // TODO: This should probably only iterate over each joint once, but DofData has multiple entries per joint!
+            for dof in itd.dof_data.iter() {
+                let parent_id = skeleton.parent(dof.joint_id);
+                let (parent_xform, parent_xform_old) = match parent_id {
+                    Some(parent_id) => (
+                        itd.final_poses
+                            .get(parent_id)
+                            .unwrap_or_else(|| skeleton.current_pose(parent_id)),
+                        itd.previous_poses
+                            .get(parent_id)
+                            .or_else(|| itd.final_poses.get(parent_id))
+                            .unwrap_or_else(|| skeleton.current_pose(parent_id)),
+                    ),
+                    None => (Mat4::IDENTITY, Mat4::IDENTITY),
+                };
+
+                let local_rot = (parent_xform_old.inverse()
+                    * itd.raw_joint_xforms.get(dof.joint_id).unwrap())
+                .rotation()
+                .normalize();
+
+                let local_translation = skeleton.local_bind_pose(dof.joint_id).translation();
+
+                // TODO: Use local transforms in this loop
+                let mut world_xform =
+                    parent_xform * Mat4::from_rotation_translation(local_rot, local_translation);
+
+                let joint_cfg = self
+                    .affected_joints
+                    .iter()
+                    .find(|joint| joint.joint_id == dof.joint_id)
+                    .unwrap();
+
+                if let Some(limits) = &joint_cfg.limits {
+                    let local_xform = (parent_xform.inverse() * world_xform).rotation();
+                    let local_bind_xform = skeleton.local_bind_pose(dof.joint_id).rotation();
+
+                    // limits are relative to the local bind pose of the joints
+                    let local_change = local_bind_xform.inverse() * local_xform;
+                    for limit in limits.iter() {
+                        let custom_axis = local_change * limit.axis;
+                        let angle = swing_twist_decompose(local_change, custom_axis);
+
+                        if angle < limit.min {
+                            world_xform = world_xform
+                                * Mat4::from_quat(Quat::from_axis_angle(
+                                    custom_axis,
+                                    limit.min - angle,
+                                ));
+                        } else if angle > limit.max {
+                            world_xform = world_xform
+                                * Mat4::from_quat(Quat::from_axis_angle(
+                                    custom_axis,
+                                    limit.max - angle,
+                                ));
+                        }
+                    }
+                }
+
+                itd.final_poses.set(dof.joint_id, world_xform);
+            }
+            skeleton.update_poses(&itd.final_poses);
         }
-        skeleton.update_poses(&itd.final_poses);
     }
 
     fn save_previous_poses<S: Skeleton>(&self, itd: &mut IterationData, skeleton: &S) {
