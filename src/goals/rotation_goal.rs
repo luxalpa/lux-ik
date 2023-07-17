@@ -30,8 +30,9 @@ impl IKGoalType for RotationGoal {
             }
         };
 
-        let influence = axis_of_rotation;
-        influence_pusher.push(influence);
+        // let influence = axis_of_rotation;
+        // TODO: Handle axis constraints
+        influence_pusher.push(rotation.to_axis_angle_180().1);
 
         axis_of_rotation
     }
@@ -40,11 +41,11 @@ impl IKGoalType for RotationGoal {
         // influences.push(axis.x);
         // influences.push(axis.y);
         // influences.push(axis.z);
-        influence_pusher.skip::<Vec3>();
+        influence_pusher.skip::<f32>();
     }
 
     fn num_effector_components(&self) -> usize {
-        3
+        1
     }
 
     fn effector_delta<S: Skeleton>(
@@ -57,10 +58,10 @@ impl IKGoalType for RotationGoal {
 
         let r = self.0 * end_effector_rot.inverse();
 
-        let (axis_of_rotation, angle) = r.to_axis_angle_180();
+        let (_axis_of_rotation, angle) = r.to_axis_angle_180();
 
-        let scaled_axis = axis_of_rotation * angle;
+        // let scaled_axis = axis_of_rotation * angle;
 
-        effector_vec_pusher.push(scaled_axis);
+        effector_vec_pusher.push(angle);
     }
 }

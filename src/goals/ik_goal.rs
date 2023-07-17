@@ -3,12 +3,13 @@ use glam::{Quat, Vec3};
 use inner::IKGoalKindInternal;
 pub(crate) use inner::IKGoalType;
 
+use super::lookat_goal::LookAtGoal;
 use super::position_goal::PositionGoal;
 use super::rot_y_goal::RotYGoal;
 use super::rotation_goal::RotationGoal;
 
 use crate::utils::SlicePusher;
-use crate::{IKJointControl, Skeleton};
+use crate::{IKJointControl, LookAtGoalData, Skeleton};
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct IKGoal {
@@ -33,6 +34,8 @@ mod inner {
 
         fn num_effector_components(&self) -> usize;
 
+        // The difference that all the Control's combined DOFs need to overcome to move the
+        // end-effector to the goal.
         fn effector_delta<S: Skeleton>(
             &self,
             end_effector_id: usize,
@@ -44,6 +47,7 @@ mod inner {
     pub(crate) enum IKGoalKindInternal {
         PositionGoal,
         RotationGoal,
+        LookAtGoal,
         RotYGoal,
     }
 }
@@ -53,6 +57,7 @@ mod inner {
 pub enum IKGoalKind {
     Position(Vec3),
     Rotation(Quat),
+    LookAt(LookAtGoalData),
     // Orientation goal that only cares about orientation around the world Y axis but leaves the
     // other axes free.
     RotY(f32),
@@ -63,6 +68,7 @@ impl IKGoalKind {
         match self {
             IKGoalKind::Position(p) => IKGoalKindInternal::PositionGoal(PositionGoal(p)),
             IKGoalKind::Rotation(r) => IKGoalKindInternal::RotationGoal(RotationGoal(r)),
+            IKGoalKind::LookAt(p) => IKGoalKindInternal::LookAtGoal(LookAtGoal(p)),
             IKGoalKind::RotY(r) => IKGoalKindInternal::RotYGoal(RotYGoal(r)),
         }
     }

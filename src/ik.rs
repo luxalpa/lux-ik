@@ -2,6 +2,7 @@ use std::cell::RefCell;
 
 use crate::goals::ik_goal::IKGoal;
 use crate::goals::{IKGoalKind, IKGoalType};
+use crate::LookAtGoalData;
 use glam::{Mat4, Quat, Vec3};
 use nalgebra::{DMatrix, MatrixXx1};
 
@@ -226,6 +227,20 @@ impl IKSolver {
     pub fn position_goals_iter_mut(&mut self) -> impl Iterator<Item = (usize, &mut Vec3)> {
         self.goals.iter_mut().filter_map(|g| match g.kind {
             IKGoalKind::Position(ref mut p) => Some((g.end_effector_id, p)),
+            _ => None,
+        })
+    }
+
+    pub fn rotation_goals_iter_mut(&mut self) -> impl Iterator<Item = (usize, &mut Quat)> {
+        self.goals.iter_mut().filter_map(|g| match g.kind {
+            IKGoalKind::Rotation(ref mut o) => Some((g.end_effector_id, o)),
+            _ => None,
+        })
+    }
+
+    pub fn lookat_goals_iter_mut(&mut self) -> impl Iterator<Item = (usize, &mut LookAtGoalData)> {
+        self.goals.iter_mut().filter_map(|g| match g.kind {
+            IKGoalKind::LookAt(ref mut l) => Some((g.end_effector_id, l)),
             _ => None,
         })
     }
