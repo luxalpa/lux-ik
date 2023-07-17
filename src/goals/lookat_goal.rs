@@ -68,15 +68,32 @@ fn lookat(origin: Vec3, end_effector: Mat4, target: Vec3, local_lookat_axis: Vec
         (target - origin).length(),
     );
 
-    let r = match r {
-        Some(r) => r,
-        None => return (Vec3::ZERO, 0.0),
-    };
-
     let to_target = (target - origin).normalize();
-    let to_r = (r - origin).normalize();
 
-    Quat::from_rotation_arc(to_r, to_target).to_axis_angle_180()
+    match r {
+        Intersection::None => return (Vec3::ZERO, 0.0),
+        Intersection::One(r) => {
+            let to_r = (r - origin).normalize();
+            Quat::from_rotation_arc(to_r, to_target).to_axis_angle_180()
+        }
+        Intersection::Two(r1, r2) => {
+            let to_r1 = (r1 - origin).normalize();
+            let to_r2 = (r2 - origin).normalize();
+            let q1 = Quat::from_rotation_arc(to_r1, to_target).to_axis_angle_180();
+            let q2 = Quat::from_rotation_arc(to_r2, to_target).to_axis_angle_180();
+            if q1.1 < q2.1 {
+                q1
+            } else {
+                q2
+            }
+        }
+    }
+}
+
+enum Intersection {
+    None,
+    One(Vec3),
+    Two(Vec3, Vec3),
 }
 
 fn intersect_ray_sphere(
@@ -84,18 +101,18 @@ fn intersect_ray_sphere(
     ray_direction: Vec3,
     sphere_center: Vec3,
     sphere_radius: f32,
-) -> Option<Vec3> {
+) -> Intersection {
     let o_minus_c = ray_origin - sphere_center;
     let p = ray_direction.dot(o_minus_c);
     let q = o_minus_c.dot(o_minus_c) - sphere_radius * sphere_radius;
 
     if q > 0.0 && p > 0.0 {
-        return None;
+        return Intersection::None;
     }
 
     let discr = p * p - q;
     if discr < 0.0 {
-        return None;
+        return Intersection::None;
     }
 
     let dist1 = -p - discr.sqrt();
@@ -104,11 +121,17 @@ fn intersect_ray_sphere(
     let dist = dist1.max(dist2);
 
     if dist < 0.0 {
-        return None;
+        return Intersection::None;
+    }
+
+    if dist1 > 0.0 && dist2 > 0.0 {
+        let hit_point1 = ray_origin + ray_direction * dist1;
+        let hit_point2 = ray_origin + ray_direction * dist2;
+        return Intersection::Two(hit_point1, hit_point2);
     }
 
     let hit_point = ray_origin + ray_direction * dist;
-    Some(hit_point)
+    Intersection::One(hit_point)
 }
 
 // #[cfg(test)]
