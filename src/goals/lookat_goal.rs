@@ -3,7 +3,7 @@ use crate::utils::{Mat4Helpers, SlicePusher, ToAxisAngle180};
 use crate::{IKJointControl, Skeleton};
 use glam::{Mat4, Quat, Vec3};
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct LookAtGoalData {
     pub target: Vec3,
     pub local_lookat_axis: Vec3,
@@ -26,6 +26,8 @@ impl IKGoalType for LookAtGoal {
             self.0.target,
             self.0.local_lookat_axis,
         );
+
+        // TODO: Support Restricted Rotation Axis
 
         influence_pusher.push(angle);
 

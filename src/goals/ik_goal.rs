@@ -11,7 +11,7 @@ use super::rotation_goal::RotationGoal;
 use crate::utils::SlicePusher;
 use crate::{IKJointControl, LookAtGoalData, Skeleton};
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct IKGoal {
     pub end_effector_id: usize,
     pub kind: IKGoalKind,
@@ -53,7 +53,7 @@ mod inner {
 }
 
 // This is used for the external interface, so we can avoid doing Position(Position(Vec3)) etc.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum IKGoalKind {
     Position(Vec3),
     Rotation(Quat),
