@@ -13,7 +13,7 @@ categories = ["game-development", "algorithms"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-glam = ">= 0.21, <= 0.23"
+glam = ">=0.21.3"
 nalgebra = "0.32.2"
 #TODO: See https://github.com/intellij-rust/intellij-rust/issues/8813
 enum_dispatch = { git = "https://gitlab.com/drewcassidy/enum_dispatch.git" }
