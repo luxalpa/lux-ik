@@ -14,7 +14,7 @@ categories = ["game-development", "algorithms"]
 
 [dependencies]
 glam = ">=0.21.3"
-nalgebra = "0.32.2"
+nalgebra = "0.32.3"
 #TODO: See https://github.com/intellij-rust/intellij-rust/issues/8813
 enum_dispatch = { git = "https://gitlab.com/drewcassidy/enum_dispatch.git" }
 
