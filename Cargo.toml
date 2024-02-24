@@ -19,5 +19,5 @@ nalgebra = "0.32.3"
 enum_dispatch = { git = "https://gitlab.com/drewcassidy/enum_dispatch.git" }
 
 [dev-dependencies]
-houdini-debug-logger = { path = "../houdini-debug-logger" }
+houdini-debug-logger = { workspace = true }
 anyhow = "1.0.71"
