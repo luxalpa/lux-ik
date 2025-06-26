@@ -1,5 +1,5 @@
 use crate::goals::ik_goal::IKGoalType;
-use crate::utils::{Mat4Helpers, SlicePusher, ToAxisAngle180};
+use crate::utils::{Mat4Helpers, SliceWriter, ToAxisAngle180};
 use crate::{IKJointControl, Skeleton};
 use glam::{Mat4, Quat, Vec3};
 
@@ -14,7 +14,7 @@ impl IKGoalType for LookAtGoal {
     fn build_dof_data<S: Skeleton>(
         &self,
         end_effector_id: usize,
-        influence_pusher: &mut SlicePusher<f32>,
+        influence_writer: &mut SliceWriter<f32>,
         skeleton: &S,
         joint: &IKJointControl,
     ) -> Vec3 {
@@ -29,13 +29,13 @@ impl IKGoalType for LookAtGoal {
 
         // TODO: Support Restricted Rotation Axis
 
-        influence_pusher.push(angle);
+        influence_writer.write(angle);
 
         axis
     }
 
-    fn build_dof_secondary_data(&self, influence_pusher: &mut SlicePusher<f32>) {
-        influence_pusher.skip::<f32>();
+    fn build_dof_secondary_data(&self, influence_writer: &mut SliceWriter<f32>) {
+        influence_writer.skip::<f32>();
     }
 
     fn num_effector_components(&self) -> usize {
@@ -45,7 +45,7 @@ impl IKGoalType for LookAtGoal {
     fn effector_delta<S: Skeleton>(
         &self,
         end_effector_id: usize,
-        effector_vec_pusher: &mut SlicePusher<f32>,
+        effector_vec_writer: &mut SliceWriter<f32>,
         skeleton: &S,
     ) {
         let end_effector = skeleton.current_pose(end_effector_id);
@@ -57,11 +57,11 @@ impl IKGoalType for LookAtGoal {
             self.0.local_lookat_axis,
         );
 
-        effector_vec_pusher.push(angle);
+        effector_vec_writer.write(angle);
     }
 }
 
-// makes the Z-Axis on the end_effector look at target
+/// Makes the Z-Axis on the end_effector look at target
 fn lookat(origin: Vec3, end_effector: Mat4, target: Vec3, local_lookat_axis: Vec3) -> (Vec3, f32) {
     let r = intersect_ray_sphere(
         end_effector.translation(),
@@ -73,7 +73,7 @@ fn lookat(origin: Vec3, end_effector: Mat4, target: Vec3, local_lookat_axis: Vec
     let to_target = (target - origin).normalize();
 
     match r {
-        Intersection::None => return (Vec3::ZERO, 0.0),
+        Intersection::None => (Vec3::ZERO, 0.0),
         Intersection::One(r) => {
             let to_r = (r - origin).normalize();
             Quat::from_rotation_arc(to_r, to_target).to_axis_angle_180()

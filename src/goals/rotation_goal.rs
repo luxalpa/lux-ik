@@ -1,5 +1,5 @@
 use crate::goals::ik_goal::IKGoalType;
-use crate::utils::{Mat4Helpers, SlicePusher, ToAxisAngle180};
+use crate::utils::{Mat4Helpers, SliceWriter, ToAxisAngle180};
 use crate::{IKJointControl, Skeleton};
 use glam::{Quat, Vec3};
 
@@ -9,7 +9,7 @@ impl IKGoalType for RotationGoal {
     fn build_dof_data<S: Skeleton>(
         &self,
         end_effector_id: usize,
-        influence_pusher: &mut SlicePusher<f32>,
+        influence_writer: &mut SliceWriter<f32>,
         skeleton: &S,
         joint: &IKJointControl,
     ) -> Vec3 {
@@ -32,16 +32,16 @@ impl IKGoalType for RotationGoal {
 
         // let influence = axis_of_rotation;
         // TODO: Handle axis constraints
-        influence_pusher.push(rotation.to_axis_angle_180().1);
+        influence_writer.write(rotation.to_axis_angle_180().1);
 
         axis_of_rotation
     }
 
-    fn build_dof_secondary_data(&self, influence_pusher: &mut SlicePusher<f32>) {
+    fn build_dof_secondary_data(&self, influence_writer: &mut SliceWriter<f32>) {
         // influences.push(axis.x);
         // influences.push(axis.y);
         // influences.push(axis.z);
-        influence_pusher.skip::<f32>();
+        influence_writer.skip::<f32>();
     }
 
     fn num_effector_components(&self) -> usize {
@@ -51,7 +51,7 @@ impl IKGoalType for RotationGoal {
     fn effector_delta<S: Skeleton>(
         &self,
         end_effector_id: usize,
-        effector_vec_pusher: &mut SlicePusher<f32>,
+        effector_vec_writer: &mut SliceWriter<f32>,
         skeleton: &S,
     ) {
         let end_effector_rot = skeleton.current_pose(end_effector_id).rotation();
@@ -62,6 +62,6 @@ impl IKGoalType for RotationGoal {
 
         // let scaled_axis = axis_of_rotation * angle;
 
-        effector_vec_pusher.push(angle);
+        effector_vec_writer.write(angle);
     }
 }

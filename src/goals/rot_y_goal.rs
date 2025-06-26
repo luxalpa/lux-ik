@@ -1,5 +1,5 @@
 use crate::goals::ik_goal::IKGoalType;
-use crate::utils::{ang_diff, Mat4Helpers, SlicePusher};
+use crate::utils::{ang_diff, Mat4Helpers, SliceWriter};
 use crate::{IKJointControl, Skeleton};
 use glam::{EulerRot, Quat, Vec3};
 
@@ -9,7 +9,7 @@ impl IKGoalType for RotYGoal {
     fn build_dof_data<S: Skeleton>(
         &self,
         _end_effector_id: usize,
-        influence_pusher: &mut SlicePusher<f32>,
+        influence_writer: &mut SliceWriter<f32>,
         skeleton: &S,
         joint: &IKJointControl,
     ) -> Vec3 {
@@ -24,12 +24,12 @@ impl IKGoalType for RotYGoal {
             .to_euler(EulerRot::YXZ)
             .0;
 
-        influence_pusher.push(influence);
+        influence_writer.write(influence);
         axis_of_rotation
     }
 
-    fn build_dof_secondary_data(&self, influence_pusher: &mut SlicePusher<f32>) {
-        influence_pusher.skip::<f32>();
+    fn build_dof_secondary_data(&self, influence_writer: &mut SliceWriter<f32>) {
+        influence_writer.skip::<f32>();
     }
 
     fn num_effector_components(&self) -> usize {
@@ -39,7 +39,7 @@ impl IKGoalType for RotYGoal {
     fn effector_delta<S: Skeleton>(
         &self,
         end_effector_id: usize,
-        effector_vec_pusher: &mut SlicePusher<f32>,
+        effector_vec_writer: &mut SliceWriter<f32>,
         skeleton: &S,
     ) {
         let end_effector_rot = skeleton
@@ -48,6 +48,6 @@ impl IKGoalType for RotYGoal {
             .to_euler(EulerRot::YXZ)
             .0;
         let delta = ang_diff(end_effector_rot, self.0);
-        effector_vec_pusher.push(delta);
+        effector_vec_writer.write(delta);
     }
 }

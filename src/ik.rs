@@ -6,7 +6,7 @@ use crate::LookAtGoalData;
 use glam::{Mat4, Quat, Vec3};
 use nalgebra::{DMatrix, MatrixXx1};
 
-use crate::utils::{swing_twist_decompose, JointMap, Mat4Helpers, SlicePusher};
+use crate::utils::{swing_twist_decompose, JointMap, Mat4Helpers, SliceWriter};
 
 const DAMPING: f32 = 3.0;
 const THRESHOLD: f32 = 10.5;
@@ -87,13 +87,13 @@ fn build_dof_data<S: Skeleton>(
         for (goal_idx, goal) in goals.iter().enumerate() {
             let dof = &mut itd.dof_data[dof_idx];
             dof_idx += 1;
-            let mut influence_pusher = SlicePusher::new(&mut dof.influences);
+            let mut influence_writer = SliceWriter::new(&mut dof.influences);
 
             for g2_idx in 0..goals.len() {
                 if g2_idx == goal_idx {
                     let axis = goal.kind.as_internal().build_dof_data(
                         goal.end_effector_id,
-                        &mut influence_pusher,
+                        &mut influence_writer,
                         skeleton,
                         joint,
                     );
@@ -102,7 +102,7 @@ fn build_dof_data<S: Skeleton>(
                     goals[g2_idx]
                         .kind
                         .as_internal()
-                        .build_dof_secondary_data(&mut influence_pusher);
+                        .build_dof_secondary_data(&mut influence_writer);
                 }
             }
             dof.influences
@@ -261,11 +261,11 @@ impl IKSolver {
             let jac_inv =
                 pseudo_inverse_damped_least_squares(&itd.jacobian, self.num_goal_components);
 
-            let mut effector_vec_pusher = SlicePusher::new(itd.effector_vec.as_mut_slice());
+            let mut effector_vec_writer = SliceWriter::new(itd.effector_vec.as_mut_slice());
             for goal in self.goals.iter() {
                 goal.kind.as_internal().effector_delta(
                     goal.end_effector_id,
-                    &mut effector_vec_pusher,
+                    &mut effector_vec_writer,
                     skeleton,
                 );
             }
@@ -283,7 +283,8 @@ impl IKSolver {
             // Our rotation axis is in world space, but during the rotation our position needs to stay fixed.
             for (theta_idx, dof) in itd.dof_data.iter().enumerate() {
                 let joint_xform = itd.raw_joint_xforms.get(dof.joint_id).unwrap();
-                let (_, rotation, translation) = joint_xform.to_scale_rotation_translation();
+                let rotation = joint_xform.rotation();
+                let translation = joint_xform.translation();
 
                 #[allow(irrefutable_let_patterns)]
                 if let DoFKind::Quaternion { axis } = dof.kind {

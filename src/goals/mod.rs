@@ -1,3 +1,4 @@
+mod distance_goal;
 pub mod ik_goal;
 mod lookat_goal;
 mod position_goal;

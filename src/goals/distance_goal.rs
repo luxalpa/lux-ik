@@ -3,9 +3,9 @@ use crate::utils::{get_rotation_axis, Mat4Helpers, SliceWriter};
 use crate::{IKJointControl, Skeleton};
 use glam::Vec3;
 
-pub struct PositionGoal(pub Vec3);
+pub struct DistanceGoal(pub Vec3);
 
-impl IKGoalType for PositionGoal {
+impl IKGoalType for DistanceGoal {
     fn build_dof_data<S: Skeleton>(
         &self,
         end_effector_id: usize,
@@ -27,7 +27,8 @@ impl IKGoalType for PositionGoal {
         };
 
         let influence = axis_of_rotation.cross(to_e);
-        influence_writer.write(influence);
+        // influence_writer.push(influence);
+        influence_writer.write(influence.dot((self.0 - end_effector_pos).normalize()));
         axis_of_rotation
     }
 
@@ -40,11 +41,13 @@ impl IKGoalType for PositionGoal {
         // influences.push(influence.x);
         // influences.push(influence.y);
         // influences.push(influence.z);
-        influence_writer.skip::<Vec3>();
+        // influence_writer.skip::<Vec3>();
+        influence_writer.skip::<f32>();
     }
 
     fn num_effector_components(&self) -> usize {
-        3
+        // 3
+        1
     }
 
     fn effector_delta<S: Skeleton>(
@@ -54,7 +57,8 @@ impl IKGoalType for PositionGoal {
         skeleton: &S,
     ) {
         let end_effector_pos = skeleton.current_pose(end_effector_id).translation();
-        let delta = self.0 - end_effector_pos;
+        // let delta = self.0 - end_effector_pos;
+        let delta = (self.0 - end_effector_pos).length();
         effector_vec_writer.write(delta);
     }
 }
